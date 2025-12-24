@@ -1,33 +1,66 @@
 import asyncio
+import os
 
 from task.clients.client import DialClient
+from task.clients.custom_client import CustomDialClient
 from task.constants import DEFAULT_SYSTEM_PROMPT
 from task.models.conversation import Conversation
 from task.models.message import Message
 from task.models.role import Role
 
+async def start(stream_mode: bool) -> None:
+  api_key = os.getenv("DIAL_API_KEY")
 
-async def start(stream: bool) -> None:
-    #TODO:
-    # 1.1. Create DialClient
-    # (you can get available deployment_name via https://ai-proxy.lab.epam.com/openai/models
-    #  you can import Postman collection to make a request, file in the project root `dial-basics.postman_collection.json`
-    #  don't forget to add your API_KEY)
-    # 1.2. Create CustomDialClient
-    # 2. Create Conversation object
-    # 3. Get System prompt from console or use default -> constants.DEFAULT_SYSTEM_PROMPT and add to conversation
-    #    messages.
-    # 4. Use infinite cycle (while True) and get yser message from console
-    # 5. If user message is `exit` then stop the loop
-    # 6. Add user message to conversation history (role 'user')
-    # 7. If `stream` param is true -> call DialClient#stream_completion()
-    #    else -> call DialClient#get_completion()
-    # 8. Add generated message to history
-    # 9. Test it with DialClient and CustomDialClient
-    # 10. In CustomDialClient add print of whole request and response to see what you send and what you get in response
-    raise NotImplementedError
+  if not api_key:
+    raise EnvironmentError("DIAL_API_KEY environment variable is not set.")
 
+  dial_client = DialClient(deployment_name="gpt-4o", api_key=api_key)
+  custom_dial_client = CustomDialClient(deployment_name="gpt-4o", api_key=api_key)
 
-asyncio.run(
-    start(True)
-)
+  conversation = Conversation()
+
+  print("Enter a system prompt or press Enter to use the default.")
+
+  sys_prompt = input("System prompt: ").strip()
+
+  if sys_prompt:
+      conversation.add_message(Message(Role.SYSTEM, sys_prompt))
+      print("System prompt added successfully.")
+  else:
+    conversation.add_message(Message(Role.SYSTEM, DEFAULT_SYSTEM_PROMPT))
+    print(f"Default system prompt applied: '{DEFAULT_SYSTEM_PROMPT}'")
+
+  print("\nType your message or 'exit' to leave the chat.")
+
+  while True:
+    user_input = input("User: ").strip()
+
+    if user_input.lower() == "exit":
+      print("Chat ended.")
+      break
+
+    conversation.add_message(Message(Role.USER, user_input))
+
+    print("Assistant:")
+
+    if stream_mode:
+      response_msg = await dial_client.stream_completion(conversation.get_messages())
+    else:
+      response_msg = dial_client.get_completion(conversation.get_messages())
+
+    conversation.add_message(response_msg)
+
+    print(response_msg.content)
+
+    print("\n[Debug] CustomDialClient response:")
+
+    if stream_mode:
+      debug_response = await custom_dial_client.stream_completion(conversation.get_messages())
+    else:
+      debug_response = custom_dial_client.get_completion(conversation.get_messages())
+    
+    print(debug_response.content)
+    print()
+
+if __name__ == "__main__":
+  asyncio.run(start(True))

@@ -7,44 +7,76 @@ from task.constants import DIAL_ENDPOINT
 from task.models.message import Message
 from task.models.role import Role
 
+class CustomDialClient(BaseClient):
+  def __init__(self, deployment_name: str, api_key: str):
+    super().__init__(deployment_name, api_key)
+    self._endpoint = f"{DIAL_ENDPOINT}/openai/deployments/{deployment_name}/chat/completions"
 
-class DialClient:
-    _endpoint: str
-    _api_key: str
+  def get_completion(self, messages: list[Message]) -> Message:
+    headers = {
+      "api-key": self._api_key,
+      "Content-Type": "application/json"
+    }
+    payload = {
+      "messages": [m.to_dict() for m in messages]
+    }
 
-    def __init__(self, deployment_name: str):
-        super().__init__(deployment_name)
-        self._endpoint = DIAL_ENDPOINT + f"/openai/deployments/{deployment_name}/chat/completions"
+    resp = requests.post(self._endpoint, headers=headers, json=payload)
 
-    def get_completion(self, messages: list[Message]) -> Message:
-        #TODO:
-        # Take a look at README.md of how the request and regular response are looks like!
-        # 1. Create headers dict with api-key and Content-Type
-        # 2. Create request_data dictionary with:
-        #   - "messages": convert messages list to dict format using msg.to_dict() for each message
-        # 3. Make POST request using requests.post() with:
-        #   - URL: self._endpoint
-        #   - headers: headers from step 1
-        #   - json: request_data from step 2
-        # 4. Get content from response, print it and return message with assistant role and content
-        # 5. If status code != 200 then raise Exception with format: f"HTTP {response.status_code}: {response.text}"
-        raise NotImplementedError
+    if resp.status_code == 200:
+      resp_json = resp.json()
+      choices = resp_json.get("choices", [])
 
-    async def stream_completion(self, messages: list[Message]) -> Message:
-        #TODO:
-        # Take a look at README.md of how the request and streamed response chunks are looks like!
-        # 1. Create headers dict with api-key and Content-Type
-        # 2. Create request_data dictionary with:
-        #    - "stream": True  (enable streaming)
-        #    - "messages": convert messages list to dict format using msg.to_dict() for each message
-        # 3. Create empty list called 'contents' to store content snippets
-        # 4. Create aiohttp.ClientSession() using 'async with' context manager
-        # 5. Inside session, make POST request using session.post() with:
-        #    - URL: self._endpoint
-        #    - json: request_data from step 2
-        #    - headers: headers from step 1
-        #    - Use 'async with' context manager for response
-        # 6. Get content from chunks (don't forget that chunk start with `data: `, final chunk is `data: [DONE]`), print
-        #    chunks, collect them and return as assistant message
-        raise NotImplementedError
+      if choices:
+        content = choices[0].get("message", {}).get("content", "")
+        print(content)
+        return Message(Role.AI, content)
+      raise Exception("No choices found in response")
+    else:
+      raise Exception(f"HTTP {resp.status_code}: {resp.text}")
 
+  async def stream_completion(self, messages: list[Message]) -> Message:
+    headers = {
+      "api-key": self._api_key,
+      "Content-Type": "application/json"
+    }
+    payload = {
+      "stream": True,
+      "messages": [m.to_dict() for m in messages]
+    }
+    content_parts = []
+
+    async with aiohttp.ClientSession() as session:
+      async with session.post(self._endpoint, headers=headers, json=payload) as resp:
+        if resp.status == 200:
+          async for raw_line in resp.content:
+            line = raw_line.decode('utf-8').strip()
+
+            if line.startswith("data: "):
+              chunk = line[6:].strip()
+
+              if chunk != "[DONE]":
+                snippet = self._get_content_snippet(chunk)
+                print(snippet, end='', flush=True)
+                content_parts.append(snippet)
+              else:
+                print()
+        else:
+          error_msg = await resp.text()
+          print(f"{resp.status} {error_msg}")
+        return Message(Role.AI, ''.join(content_parts))
+
+  def _get_content_snippet(self, data: str) -> str:
+    """
+    Extracts the content snippet from a streaming data chunk.
+    """
+    try:
+      parsed = json.loads(data)
+      choices = parsed.get("choices", [])
+
+      if choices:
+        delta = choices[0].get("delta", {})
+        return delta.get("content", "")
+    except Exception as e:
+      print(f"Error parsing chunk: {e}")
+    return ""
